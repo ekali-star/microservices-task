@@ -1,0 +1,11 @@
+[TRAINEE]
+1,John,Doe,John.Doe,password123,true,1990-01-01,123 Main St New York NY
+2,Alice,Johnson,Alice.Johnson,password123,true,1988-05-15,456 Oak Ave Los Angeles CA
+
+[TRAINER]
+1,Jane,Smith,Jane.Smith,password123,true,Fitness
+2,Mike,Wilson,Mike.Wilson,password123,true,Yoga
+
+[TRAINING]
+1,1,1,Morning Cardio,CARDIO,2024-01-15,60
+2,2,2,Evening Yoga,YOGA,2024-01-16,45

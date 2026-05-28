@@ -1,0 +1,31 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+
+# Maven / Java
+target/
+*.class
+
+# Logs
+*.log
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Eclipse (if used)
+.project
+.settings/
+.classpath
+
+# Temporary files
+*.tmp
+*.swp
+
+# Code coverage
+jacoco.exec
+
+# Optional: test reports
+surefire-reports/
