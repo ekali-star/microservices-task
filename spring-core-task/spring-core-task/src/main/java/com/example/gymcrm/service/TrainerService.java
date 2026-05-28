@@ -1,10 +1,12 @@
 package com.example.gymcrm.service;
 
-import com.example.gymcrm.dto.Auth;
+import com.example.gymcrm.metric.UserMetrics;
 import com.example.gymcrm.model.Trainer;
 import com.example.gymcrm.repository.TrainerRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Collection;
@@ -16,7 +18,11 @@ public class TrainerService extends UserService<Trainer> {
 
     private final TrainerRepository trainerRepository;
 
-    public TrainerService(TrainerRepository trainerRepository) {
+    @Autowired
+    public TrainerService(TrainerRepository trainerRepository,
+                          UserMetrics userMetrics,
+                          PasswordEncoder passwordEncoder) {
+        super(userMetrics, passwordEncoder);
         this.trainerRepository = trainerRepository;
     }
 
@@ -40,18 +46,18 @@ public class TrainerService extends UserService<Trainer> {
         return trainerRepository.findByUserUsername(username);
     }
 
-    public Trainer updateTrainer(Auth auth, Trainer updatedTrainer) {
-        if (!authenticate(auth)) {
-            throw new IllegalArgumentException("Authentication failed");
-        }
-
-        Trainer existing = findByUsernameOptional(auth.getUsername())
+    public Trainer updateTrainer(String username, Trainer updatedTrainer) {
+        Trainer existing = findByUsernameOptional(username)
                 .orElseThrow(() -> new IllegalArgumentException("Trainer not found"));
 
-        existing.setSpecialization(updatedTrainer.getSpecialization());
         existing.getUser().setFirstName(updatedTrainer.getUser().getFirstName());
         existing.getUser().setLastName(updatedTrainer.getUser().getLastName());
 
         return trainerRepository.save(existing);
+    }
+
+    @Override
+    protected void afterCreate(Trainer entity) {
+        userMetrics.incrementTrainer();
     }
 }

@@ -12,6 +12,7 @@ import java.time.LocalDate;
 @Table(name = "training")
 @Getter
 @Setter
+@Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor
 public class Training {
@@ -44,4 +45,5 @@ public class Training {
     @Min(1)
     @Column(nullable = false)
     private Integer trainingDuration;
+
 }

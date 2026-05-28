@@ -4,10 +4,13 @@ import jakarta.persistence.*;
 import jakarta.validation.constraints.NotBlank;
 import lombok.*;
 
+import java.time.Instant;
+
 @Entity
 @Table(name = "users")
 @Getter
 @Setter
+@Builder
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @AllArgsConstructor
 public class User {
@@ -34,4 +37,7 @@ public class User {
     @Column(name = "is_active", nullable = false)
     private Boolean isActive;
 
+    private int failedAttempts;
+    private Instant blockedUntil;
+    private Instant lastLogout;
 }

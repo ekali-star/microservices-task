@@ -2,16 +2,20 @@ package com.example.gymcrm.service;
 
 import com.example.gymcrm.dto.Auth;
 import com.example.gymcrm.dto.AuthCredentials;
+import com.example.gymcrm.metric.UserMetrics;
 import com.example.gymcrm.model.Trainer;
 import com.example.gymcrm.model.TrainingType;
 import com.example.gymcrm.model.User;
 import com.example.gymcrm.repository.TrainerRepository;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
 import java.util.Optional;
@@ -24,110 +28,151 @@ class TrainerServiceTest {
 
     @Mock
     private TrainerRepository trainerRepository;
+    @Mock
+    private PasswordEncoder passwordEncoder;
+    @Mock
+    private UserMetrics userMetrics;
 
+    @InjectMocks
     private TrainerService trainerService;
 
-    private User user;
-    private Trainer trainer;
-    private Auth validAuth;
-
-    @BeforeEach
-    void setUp() {
-        trainerService = new TrainerService(trainerRepository);
-        user = new User(1L, "Mike", "Smith", "mike.smith", "password", true);
-        trainer = new Trainer();
-        trainer.setId(1L);
+    @Test
+    void create_success_generatesCredentials_andIncrementsMetrics() {
+        Trainer trainer = new Trainer();
+        User user = User.builder()
+                .firstName("John")
+                .lastName("Doe")
+                .build();
         trainer.setUser(user);
-        trainer.setSpecialization(new TrainingType(1L, "Cardio"));
-        validAuth = new Auth("mike.smith", "password");
-    }
 
-    @Test
-    void create_ShouldGenerateCredentialsAndSave() {
         when(trainerRepository.findAll()).thenReturn(List.of());
-        when(trainerRepository.save(any())).thenReturn(trainer);
+        when(passwordEncoder.encode(any())).thenReturn("encodedPass");
+        when(trainerRepository.save(any())).thenAnswer(i -> i.getArgument(0));
 
-        try (MockedStatic<CredentialsGenerator> mocked = mockStatic(CredentialsGenerator.class)) {
-            mocked.when(() -> CredentialsGenerator.generateUsername(any(), any(), anyList()))
-                    .thenReturn("mike.smith");
-            mocked.when(CredentialsGenerator::generatePassword).thenReturn("password");
+        AuthCredentials result = trainerService.create(trainer);
 
-            AuthCredentials result = trainerService.create(trainer);
+        assertNotNull(result.getUsername());
+        assertNotNull(result.getPassword());
 
-            assertEquals("mike.smith", result.getUsername());
-            assertEquals("password", result.getPassword());
-        }
+        assertEquals("encodedPass", trainer.getUser().getPassword());
+        assertTrue(trainer.getUser().getIsActive());
+
+        verify(userMetrics).incrementTrainer();
     }
 
     @Test
-    void findById_ShouldReturnTrainer() {
-        when(trainerRepository.findById(1L)).thenReturn(Optional.of(trainer));
-        assertEquals(trainer, trainerService.findById(1L));
+    void authenticate_success() {
+        User user = User.builder().password("encoded").build();
+        Trainer trainer = new Trainer();
+        trainer.setUser(user);
+
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.of(trainer));
+        when(passwordEncoder.matches("raw", "encoded")).thenReturn(true);
+
+        assertTrue(trainerService.authenticate("u", "raw"));
     }
 
     @Test
-    void findByUsername_ShouldReturnTrainer() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        assertEquals(trainer, trainerService.findByUsername("mike.smith"));
+    void authenticate_fail_userNotFound() {
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.empty());
+
+        assertFalse(trainerService.authenticate("u", "pass"));
     }
 
     @Test
-    void authenticate_ShouldReturnTrueForValidCredentials() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        assertTrue(trainerService.authenticate("mike.smith", "password"));
+    void changePassword_success() {
+        User user = User.builder().password("encoded").build();
+        Trainer trainer = new Trainer();
+        trainer.setUser(user);
+
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.of(trainer));
+        when(passwordEncoder.matches("old", "encoded")).thenReturn(true);
+        when(passwordEncoder.encode("new")).thenReturn("newEncoded");
+
+        trainerService.changePassword(new Auth("u", "old"), "new");
+
+        assertEquals("newEncoded", trainer.getUser().getPassword());
+        verify(trainerRepository).save(trainer);
     }
 
     @Test
-    void authenticate_ShouldReturnFalseForInvalidPassword() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        assertFalse(trainerService.authenticate("mike.smith", "wrong"));
+    void changePassword_fail_wrongPassword() {
+        User user = User.builder().password("encoded").build();
+        Trainer trainer = new Trainer();
+        trainer.setUser(user);
+
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.of(trainer));
+        when(passwordEncoder.matches(any(), any())).thenReturn(false);
+
+        assertThrows(IllegalArgumentException.class, () ->
+                trainerService.changePassword(new Auth("u", "wrong"), "new")
+        );
     }
 
     @Test
-    void changePassword_ShouldUpdatePassword() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        when(trainerRepository.save(trainer)).thenReturn(trainer);
+    void setActiveStatus_success() {
+        User user = User.builder().isActive(true).build();
+        Trainer trainer = new Trainer();
+        trainer.setUser(user);
 
-        trainerService.changePassword(validAuth, "newPass");
-        assertEquals("newPass", user.getPassword());
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.of(trainer));
+
+        trainerService.setActiveStatus("u", false);
+
+        assertFalse(trainer.getUser().getIsActive());
+        verify(trainerRepository).save(trainer);
     }
 
     @Test
-    void changePassword_ShouldThrowWhenAuthFails() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        assertThrows(IllegalArgumentException.class,
-                () -> trainerService.changePassword(new Auth("mike.smith", "wrong"), "newPass"));
+    void setActiveStatus_fail_userNotFound() {
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(IllegalArgumentException.class, () ->
+                trainerService.setActiveStatus("u", true)
+        );
     }
 
     @Test
-    void setActiveStatus_ShouldUpdateStatus() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        when(trainerRepository.save(trainer)).thenReturn(trainer);
+    void updateTrainer_success() {
+        Trainer existing = new Trainer();
+        User existingUser = User.builder()
+                .firstName("Old")
+                .lastName("Name")
+                .build();
+        existing.setUser(existingUser);
 
-        trainerService.setActiveStatus(validAuth, false);
-        assertFalse(user.getIsActive());
+        Trainer patch = new Trainer();
+        patch.setUser(User.builder()
+                .firstName("New")
+                .lastName("Name")
+                .build());
+
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.of(existing));
+        when(trainerRepository.save(any())).thenReturn(existing);
+
+        Trainer result = trainerService.updateTrainer("u", patch);
+
+        assertEquals("New", result.getUser().getFirstName());
+        assertEquals("Name", result.getUser().getLastName());
     }
 
     @Test
-    void updateTrainer_ShouldUpdateFields() {
-        Trainer updated = new Trainer();
-        updated.setUser(new User(null, "Michael", "Johnson", null, null, true));
-        updated.setSpecialization(new TrainingType(2L, "Strength"));
+    void updateTrainer_fail_notFound() {
+        when(trainerRepository.findByUserUsername("u"))
+                .thenReturn(Optional.empty());
 
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        when(trainerRepository.save(trainer)).thenReturn(trainer);
+        Trainer patch = new Trainer();
+        patch.setUser(User.builder().firstName("New").lastName("Name").build());
 
-        Trainer result = trainerService.updateTrainer(validAuth, updated);
-
-        assertEquals("Michael", result.getUser().getFirstName());
-        assertEquals("Johnson", result.getUser().getLastName());
-        assertEquals("Strength", result.getSpecialization().getTrainingTypeName());
-    }
-
-    @Test
-    void updateTrainer_ShouldThrowWhenAuthFails() {
-        when(trainerRepository.findByUserUsername("mike.smith")).thenReturn(Optional.of(trainer));
-        assertThrows(IllegalArgumentException.class,
-                () -> trainerService.updateTrainer(new Auth("mike.smith", "wrong"), new Trainer()));
+        assertThrows(IllegalArgumentException.class, () ->
+                trainerService.updateTrainer("u", patch)
+        );
     }
 }
