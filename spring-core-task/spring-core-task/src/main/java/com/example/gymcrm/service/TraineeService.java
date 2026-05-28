@@ -1,12 +1,14 @@
 package com.example.gymcrm.service;
 
-import com.example.gymcrm.dto.Auth;
+import com.example.gymcrm.metric.UserMetrics;
 import com.example.gymcrm.model.Trainee;
 import com.example.gymcrm.model.Trainer;
 import com.example.gymcrm.repository.TraineeRepository;
 import com.example.gymcrm.repository.TrainerRepository;
 import jakarta.transaction.Transactional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Collection;
@@ -22,7 +24,12 @@ public class TraineeService extends UserService<Trainee> {
     private final TraineeRepository traineeRepository;
     private final TrainerRepository trainerRepository;
 
-    public TraineeService(TraineeRepository traineeRepository, TrainerRepository trainerRepository) {
+    @Autowired
+    public TraineeService(TraineeRepository traineeRepository,
+                          TrainerRepository trainerRepository,
+                          UserMetrics userMetrics,
+                          PasswordEncoder passwordEncoder) {
+        super(userMetrics, passwordEncoder);
         this.traineeRepository = traineeRepository;
         this.trainerRepository = trainerRepository;
     }
@@ -47,47 +54,30 @@ public class TraineeService extends UserService<Trainee> {
         return traineeRepository.findByUserUsername(username);
     }
 
-    public Trainee updateTrainee(Auth auth, Trainee updatedTrainee) {
-        if (!authenticate(auth)) {
-            throw new IllegalArgumentException("Authentication failed");
-        }
-
-        Trainee existing = findByUsernameOptional(auth.getUsername())
+    public Trainee updateTrainee(String username, Trainee updatedTrainee) {
+        Trainee existing = findByUsernameOptional(username)
                 .orElseThrow(() -> new IllegalArgumentException("Trainee not found"));
 
         existing.setDateOfBirth(updatedTrainee.getDateOfBirth());
         existing.setAddress(updatedTrainee.getAddress());
-
         existing.getUser().setFirstName(updatedTrainee.getUser().getFirstName());
         existing.getUser().setLastName(updatedTrainee.getUser().getLastName());
 
         return traineeRepository.save(existing);
     }
 
-    public void deleteTrainee(Auth auth) {
-        if (!authenticate(auth)) {
-            throw new IllegalArgumentException("Authentication failed");
-        }
-
-        Trainee trainee = findByUsernameOptional(auth.getUsername())
+    public void deleteTrainee(String username) {
+        Trainee trainee = findByUsernameOptional(username)
                 .orElseThrow(() -> new IllegalArgumentException("Trainee not found"));
-
         traineeRepository.delete(trainee);
     }
 
-    public List<Trainer> getUnassignedTrainers(Auth auth) {
-        if (!authenticate(auth)) {
-            throw new IllegalArgumentException("Authentication failed");
-        }
-        return trainerRepository.findNotAssignedToTrainee(auth.getUsername());
+    public List<Trainer> getUnassignedTrainers(String username) {
+        return trainerRepository.findNotAssignedToTrainee(username);
     }
 
-    public void updateTrainers(Auth auth, List<String> trainerUsernames) {
-        if (!authenticate(auth)) {
-            throw new IllegalArgumentException("Authentication failed");
-        }
-
-        Trainee trainee = traineeRepository.findWithTrainersByUserUsername(auth.getUsername())
+    public void updateTrainers(String username, List<String> trainerUsernames) {
+        Trainee trainee = traineeRepository.findWithTrainersByUserUsername(username)
                 .orElseThrow(() -> new IllegalArgumentException("Trainee not found"));
 
         Set<String> currentTrainerUsernames = trainee.getTrainers().stream()
@@ -95,7 +85,7 @@ public class TraineeService extends UserService<Trainee> {
                 .collect(Collectors.toSet());
 
         Set<String> newTrainerUsernames = trainerUsernames.stream()
-                .filter(username -> !currentTrainerUsernames.contains(username))
+                .filter(u -> !currentTrainerUsernames.contains(u))
                 .collect(Collectors.toSet());
 
         List<Trainer> newTrainers = trainerRepository.findByUserUsernameIn(newTrainerUsernames);
@@ -105,7 +95,7 @@ public class TraineeService extends UserService<Trainee> {
                 .collect(Collectors.toSet());
 
         Set<String> missingUsernames = newTrainerUsernames.stream()
-                .filter(username -> !foundUsernames.contains(username))
+                .filter(u -> !foundUsernames.contains(u))
                 .collect(Collectors.toSet());
 
         if (!missingUsernames.isEmpty()) {
@@ -113,12 +103,15 @@ public class TraineeService extends UserService<Trainee> {
         }
 
         Set<String> requestedUsernamesSet = Set.copyOf(trainerUsernames);
-
         trainee.getTrainers().removeIf(trainer ->
                 !requestedUsernamesSet.contains(trainer.getUser().getUsername()));
-
         trainee.getTrainers().addAll(newTrainers);
 
         traineeRepository.save(trainee);
+    }
+
+    @Override
+    protected void afterCreate(Trainee entity) {
+        userMetrics.incrementTrainee();
     }
 }

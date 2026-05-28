@@ -1,142 +1,315 @@
 package com.example.gymcrm.service;
 
 import com.example.gymcrm.dto.Auth;
+import com.example.gymcrm.metric.TrainingMetrics;
 import com.example.gymcrm.model.*;
 import com.example.gymcrm.repository.TrainingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class TrainingServiceTest {
 
-    @Mock
-    private TrainingRepository trainingRepository;
+    @Mock private TrainingRepository trainingRepository;
+    @Mock private TraineeService traineeService;
+    @Mock private TrainerService trainerService;
+    @Mock private TrainingMetrics trainingMetrics;
 
-    @Mock
-    private TraineeService traineeService;
-
-    @Mock
-    private TrainerService trainerService;
-
+    @InjectMocks
     private TrainingService trainingService;
 
-    private Trainee trainee;
-    private Trainer trainer;
+    private Trainee activeTrainee;
+    private Trainer activeTrainer;
     private Training training;
-    private Auth traineeAuth;
-    private Auth trainerAuth;
 
     @BeforeEach
     void setUp() {
-        trainingService = new TrainingService(trainingRepository, traineeService, trainerService);
+        User traineeUser = User.builder()
+                .username("alice.smith").firstName("Alice").lastName("Smith")
+                .password("pass").isActive(true).build();
+        User trainerUser = User.builder()
+                .username("tom.brown").firstName("Tom").lastName("Brown")
+                .password("pass").isActive(true).build();
 
-        User traineeUser = new User(1L, "John", "Doe", "john.doe", "pass", true);
-        trainee = new Trainee(1L, LocalDate.now(), "Address", traineeUser, List.of(), List.of());
+        TrainingType type = TrainingType.builder().id(1L).trainingTypeName("Yoga").build();
 
-        User trainerUser = new User(2L, "Mike", "Smith", "mike.smith", "pass", true);
-        trainer = new Trainer();
-        trainer.setId(1L);
-        trainer.setUser(trainerUser);
-        trainer.setSpecialization(new TrainingType(1L, "Cardio"));
+        activeTrainee = new Trainee();
+        activeTrainee.setId(1L);
+        activeTrainee.setUser(traineeUser);
+        activeTrainee.setTrainers(new ArrayList<>());
+        activeTrainee.setTrainings(new ArrayList<>());
 
-        training = new Training(1L, trainee, trainer, "Training",
-                new TrainingType(1L, "Cardio"), LocalDate.now(), 60);
+        activeTrainer = new Trainer();
+        activeTrainer.setId(1L);
+        activeTrainer.setUser(trainerUser);
+        activeTrainer.setSpecialization(type);
+        activeTrainer.setTrainees(new ArrayList<>());
+        activeTrainer.setTrainings(new ArrayList<>());
 
-        traineeAuth = new Auth("john.doe", "pass");
-        trainerAuth = new Auth("mike.smith", "pass");
+        training = Training.builder()
+                .trainingName("Morning Yoga")
+                .trainingType(type)
+                .trainingDate(LocalDate.of(2024, 6, 1))
+                .trainingDuration(60)
+                .build();
     }
 
+    // ── createTraining ────────────────────────────────────────────────────────
+
     @Test
-    void createTraining_ShouldSaveAndReturnTraining() {
-        when(traineeService.findByUsername("john.doe")).thenReturn(trainee);
-        when(trainerService.findByUsername("mike.smith")).thenReturn(trainer);
-        when(trainingRepository.save(training)).thenReturn(training);
+    void createTraining_shouldSaveAndReturnTraining_whenBothActive() {
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("tom.brown")).thenReturn(activeTrainer);
+        when(trainingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        Training result = trainingService.createTraining("john.doe", "mike.smith", training);
+        Training result = trainingService.createTraining("alice.smith", "tom.brown", training);
 
-        assertEquals(training, result);
+        assertThat(result.getTrainee()).isSameAs(activeTrainee);
+        assertThat(result.getTrainer()).isSameAs(activeTrainer);
         verify(trainingRepository).save(training);
     }
 
     @Test
-    void createTraining_ShouldThrowWhenTraineeNotFound() {
-        when(traineeService.findByUsername("unknown")).thenReturn(null);
-        assertThrows(IllegalArgumentException.class,
-                () -> trainingService.createTraining("unknown", "mike.smith", training));
+    void createTraining_shouldIncrementMetric_whenSuccessful() {
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("tom.brown")).thenReturn(activeTrainer);
+        when(trainingRepository.save(any())).thenReturn(training);
+
+        trainingService.createTraining("alice.smith", "tom.brown", training);
+
+        verify(trainingMetrics).increment();
     }
 
     @Test
-    void createTraining_ShouldThrowWhenTrainerNotFound() {
-        when(traineeService.findByUsername("john.doe")).thenReturn(trainee);
-        when(trainerService.findByUsername("unknown")).thenReturn(null);
-        assertThrows(IllegalArgumentException.class,
-                () -> trainingService.createTraining("john.doe", "unknown", training));
+    void createTraining_shouldThrow_whenTraineeNotFound() {
+        when(traineeService.findByUsername("ghost")).thenReturn(null);
+
+        assertThatThrownBy(() ->
+                trainingService.createTraining("ghost", "tom.brown", training))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Trainee not found: ghost");
+
+        verify(trainingRepository, never()).save(any());
+        verify(trainingMetrics, never()).increment();
     }
 
     @Test
-    void createTraining_ShouldThrowWhenTraineeInactive() {
-        trainee.getUser().setIsActive(false);
-        when(traineeService.findByUsername("john.doe")).thenReturn(trainee);
-        when(trainerService.findByUsername("mike.smith")).thenReturn(trainer);
-        assertThrows(IllegalArgumentException.class,
-                () -> trainingService.createTraining("john.doe", "mike.smith", training));
+    void createTraining_shouldThrow_whenTrainerNotFound() {
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("ghost")).thenReturn(null);
+
+        assertThatThrownBy(() ->
+                trainingService.createTraining("alice.smith", "ghost", training))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Trainer not found: ghost");
+
+        verify(trainingRepository, never()).save(any());
     }
 
     @Test
-    void getTraineeTrainings_ShouldReturnList() {
-        when(traineeService.authenticate(traineeAuth)).thenReturn(true);
-        when(trainingRepository.findTraineeTrainings(eq("john.doe"), any(), any(), any(), any()))
+    void createTraining_shouldThrow_whenTraineeIsInactive() {
+        activeTrainee.getUser().setIsActive(false);
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("tom.brown")).thenReturn(activeTrainer);
+
+        assertThatThrownBy(() ->
+                trainingService.createTraining("alice.smith", "tom.brown", training))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Trainee or Trainer is not active");
+
+        verify(trainingRepository, never()).save(any());
+    }
+
+    @Test
+    void createTraining_shouldThrow_whenTrainerIsInactive() {
+        activeTrainer.getUser().setIsActive(false);
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("tom.brown")).thenReturn(activeTrainer);
+
+        assertThatThrownBy(() ->
+                trainingService.createTraining("alice.smith", "tom.brown", training))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Trainee or Trainer is not active");
+
+        verify(trainingRepository, never()).save(any());
+    }
+
+    @Test
+    void createTraining_shouldThrow_whenBothInactive() {
+        activeTrainee.getUser().setIsActive(false);
+        activeTrainer.getUser().setIsActive(false);
+        when(traineeService.findByUsername("alice.smith")).thenReturn(activeTrainee);
+        when(trainerService.findByUsername("tom.brown")).thenReturn(activeTrainer);
+
+        assertThatThrownBy(() ->
+                trainingService.createTraining("alice.smith", "tom.brown", training))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    // ── getTraineeTrainings (with Auth) ───────────────────────────────────────
+
+    @Test
+    void getTraineeTrainings_withAuth_shouldReturnTrainings_whenAuthenticated() {
+        Auth auth = new Auth("alice.smith", "pass");
+        when(traineeService.authenticate(auth)).thenReturn(true);
+        when(trainingRepository.findTraineeTrainings("alice.smith", null, null, null, null))
                 .thenReturn(List.of(training));
 
-        List<Training> result = trainingService.getTraineeTrainings(traineeAuth, null, null, null, null);
+        List<Training> result = trainingService.getTraineeTrainings(auth, null, null, null, null);
 
-        assertEquals(1, result.size());
+        assertThat(result).containsExactly(training);
     }
 
     @Test
-    void getTraineeTrainings_ShouldThrowWhenAuthFails() {
-        when(traineeService.authenticate(traineeAuth)).thenReturn(false);
-        assertThrows(IllegalArgumentException.class,
-                () -> trainingService.getTraineeTrainings(traineeAuth, null, null, null, null));
+    void getTraineeTrainings_withAuth_shouldThrow_whenNotAuthenticated() {
+        Auth auth = new Auth("alice.smith", "wrongPass");
+        when(traineeService.authenticate(auth)).thenReturn(false);
+
+        assertThatThrownBy(() ->
+                trainingService.getTraineeTrainings(auth, null, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Authentication failed");
+
+        verify(trainingRepository, never()).findTraineeTrainings(any(), any(), any(), any(), any());
     }
 
+    // ── getTraineeTrainings (by username) ─────────────────────────────────────
+
     @Test
-    void getTrainerTrainings_ShouldReturnList() {
-        when(trainerService.authenticate(trainerAuth)).thenReturn(true);
-        when(trainingRepository.findTrainerTrainings(eq("mike.smith"), any(), any(), any()))
+    void getTraineeTrainings_byUsername_shouldDelegateToRepository() {
+        LocalDate from = LocalDate.of(2024, 1, 1);
+        LocalDate to   = LocalDate.of(2024, 12, 31);
+        when(trainingRepository.findTraineeTrainings("alice.smith", from, to, "Tom", 1L))
                 .thenReturn(List.of(training));
 
-        List<Training> result = trainingService.getTrainerTrainings(trainerAuth, null, null, null);
+        List<Training> result = trainingService.getTraineeTrainings("alice.smith", from, to, "Tom", 1L);
 
-        assertEquals(1, result.size());
+        assertThat(result).containsExactly(training);
+        verify(trainingRepository).findTraineeTrainings("alice.smith", from, to, "Tom", 1L);
     }
 
     @Test
-    void getTrainerTrainings_ShouldThrowWhenAuthFails() {
-        when(trainerService.authenticate(trainerAuth)).thenReturn(false);
-        assertThrows(IllegalArgumentException.class,
-                () -> trainingService.getTrainerTrainings(trainerAuth, null, null, null));
+    void getTraineeTrainings_byUsername_shouldReturnEmpty_whenNoResults() {
+        when(trainingRepository.findTraineeTrainings(any(), any(), any(), any(), any()))
+                .thenReturn(List.of());
+
+        List<Training> result = trainingService.getTraineeTrainings("alice.smith", null, null, null, null);
+
+        assertThat(result).isEmpty();
     }
 
     @Test
-    void findById_ShouldReturnTraining() {
+    void getTraineeTrainings_byUsername_shouldPassNullFiltersThrough() {
+        when(trainingRepository.findTraineeTrainings("alice.smith", null, null, null, null))
+                .thenReturn(List.of());
+
+        trainingService.getTraineeTrainings("alice.smith", null, null, null, null);
+
+        verify(trainingRepository).findTraineeTrainings("alice.smith", null, null, null, null);
+    }
+
+    // ── getTrainerTrainings (with Auth) ───────────────────────────────────────
+
+    @Test
+    void getTrainerTrainings_withAuth_shouldReturnTrainings_whenAuthenticated() {
+        Auth auth = new Auth("tom.brown", "pass");
+        when(trainerService.authenticate(auth)).thenReturn(true);
+        when(trainingRepository.findTrainerTrainings("tom.brown", null, null, null))
+                .thenReturn(List.of(training));
+
+        List<Training> result = trainingService.getTrainerTrainings(auth, null, null, null);
+
+        assertThat(result).containsExactly(training);
+    }
+
+    @Test
+    void getTrainerTrainings_withAuth_shouldThrow_whenNotAuthenticated() {
+        Auth auth = new Auth("tom.brown", "wrongPass");
+        when(trainerService.authenticate(auth)).thenReturn(false);
+
+        assertThatThrownBy(() ->
+                trainingService.getTrainerTrainings(auth, null, null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Authentication failed");
+
+        verify(trainingRepository, never()).findTrainerTrainings(any(), any(), any(), any());
+    }
+
+    // ── getTrainerTrainings (by username) ─────────────────────────────────────
+
+    @Test
+    void getTrainerTrainings_byUsername_shouldDelegateToRepository() {
+        LocalDate from = LocalDate.of(2024, 3, 1);
+        LocalDate to   = LocalDate.of(2024, 9, 30);
+        when(trainingRepository.findTrainerTrainings("tom.brown", from, to, "Alice"))
+                .thenReturn(List.of(training));
+
+        List<Training> result = trainingService.getTrainerTrainings("tom.brown", from, to, "Alice");
+
+        assertThat(result).containsExactly(training);
+        verify(trainingRepository).findTrainerTrainings("tom.brown", from, to, "Alice");
+    }
+
+    @Test
+    void getTrainerTrainings_byUsername_shouldReturnEmpty_whenNoResults() {
+        when(trainingRepository.findTrainerTrainings(any(), any(), any(), any()))
+                .thenReturn(List.of());
+
+        List<Training> result = trainingService.getTrainerTrainings("tom.brown", null, null, null);
+
+        assertThat(result).isEmpty();
+    }
+
+    // ── findById ──────────────────────────────────────────────────────────────
+
+    @Test
+    void findById_shouldReturnTraining_whenExists() {
         when(trainingRepository.findById(1L)).thenReturn(Optional.of(training));
-        assertTrue(trainingService.findById(1L).isPresent());
+
+        Optional<Training> result = trainingService.findById(1L);
+
+        assertThat(result).isPresent().contains(training);
     }
 
     @Test
-    void findAll_ShouldReturnAllTrainings() {
+    void findById_shouldReturnEmpty_whenNotFound() {
+        when(trainingRepository.findById(99L)).thenReturn(Optional.empty());
+
+        Optional<Training> result = trainingService.findById(99L);
+
+        assertThat(result).isEmpty();
+    }
+
+    // ── findAll ───────────────────────────────────────────────────────────────
+
+    @Test
+    void findAll_shouldReturnAllTrainings() {
         when(trainingRepository.findAll()).thenReturn(List.of(training));
-        assertEquals(1, trainingService.findAll().size());
+
+        List<Training> result = trainingService.findAll();
+
+        assertThat(result).hasSize(1).containsExactly(training);
+    }
+
+    @Test
+    void findAll_shouldReturnEmpty_whenNoTrainings() {
+        when(trainingRepository.findAll()).thenReturn(List.of());
+
+        List<Training> result = trainingService.findAll();
+
+        assertThat(result).isEmpty();
     }
 }

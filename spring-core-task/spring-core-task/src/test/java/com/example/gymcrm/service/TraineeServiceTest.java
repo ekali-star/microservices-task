@@ -1,7 +1,6 @@
 package com.example.gymcrm.service;
 
-import com.example.gymcrm.dto.Auth;
-import com.example.gymcrm.dto.AuthCredentials;
+import com.example.gymcrm.metric.UserMetrics;
 import com.example.gymcrm.model.Trainee;
 import com.example.gymcrm.model.Trainer;
 import com.example.gymcrm.model.User;
@@ -10,267 +9,295 @@ import com.example.gymcrm.repository.TrainerRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
 import org.mockito.Mock;
-import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.assertj.core.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class TraineeServiceTest {
 
-    @Mock
-    private TraineeRepository traineeRepository;
+    @Mock private TraineeRepository traineeRepository;
+    @Mock private TrainerRepository trainerRepository;
+    @Mock private UserMetrics userMetrics;
+    @Mock private PasswordEncoder passwordEncoder;
 
-    @Mock
-    private TrainerRepository trainerRepository;
-
+    @InjectMocks
     private TraineeService traineeService;
 
-    private User user;
-    private Trainee trainee;
-    private Auth validAuth;
+    private Trainee existingTrainee;
+    private User traineeUser;
 
     @BeforeEach
     void setUp() {
-        traineeService = new TraineeService(traineeRepository, trainerRepository);
-        user = new User(1L, "John", "Doe", "john.doe", "password", true);
-        trainee = new Trainee(1L, LocalDate.now(), "Address", user, new ArrayList<>(), new ArrayList<>());
-        validAuth = new Auth("john.doe", "password");
+        traineeUser = User.builder()
+                .id(1L)
+                .firstName("Alice")
+                .lastName("Smith")
+                .username("alice.smith")
+                .password("encoded")
+                .isActive(true)
+                .build();
+
+        existingTrainee = new Trainee();
+        existingTrainee.setId(1L);
+        existingTrainee.setUser(traineeUser);
+        existingTrainee.setDateOfBirth(LocalDate.of(1990, 5, 20));
+        existingTrainee.setAddress("123 Main St");
+        existingTrainee.setTrainers(new ArrayList<>());
+        existingTrainee.setTrainings(new ArrayList<>());
+    }
+
+    // ── updateTrainee ─────────────────────────────────────────────────────────
+
+    @Test
+    void updateTrainee_shouldReturnSavedTrainee_whenFound() {
+        Trainee updated = new Trainee();
+        updated.setDateOfBirth(LocalDate.of(1992, 3, 10));
+        updated.setAddress("456 Oak Ave");
+        User updatedUser = User.builder().firstName("Alicia").lastName("Johnson").password("p").build();
+        updated.setUser(updatedUser);
+
+        when(traineeRepository.findByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        when(traineeRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        Trainee result = traineeService.updateTrainee("alice.smith", updated);
+
+        assertThat(result.getDateOfBirth()).isEqualTo(LocalDate.of(1992, 3, 10));
+        assertThat(result.getAddress()).isEqualTo("456 Oak Ave");
+        assertThat(result.getUser().getFirstName()).isEqualTo("Alicia");
+        assertThat(result.getUser().getLastName()).isEqualTo("Johnson");
     }
 
     @Test
-    void create_ShouldGenerateCredentialsAndSave() {
-        when(traineeRepository.findAll()).thenReturn(List.of());
-        when(traineeRepository.save(any())).thenReturn(trainee);
+    void updateTrainee_shouldCallSaveWithExistingEntity() {
+        Trainee update = new Trainee();
+        update.setAddress("New Address");
+        update.setUser(User.builder().firstName("A").lastName("B").password("p").build());
 
-        try (MockedStatic<CredentialsGenerator> mocked = mockStatic(CredentialsGenerator.class)) {
-            mocked.when(() -> CredentialsGenerator.generateUsername(any(), any(), anyList()))
-                    .thenReturn("john.doe");
-            mocked.when(CredentialsGenerator::generatePassword).thenReturn("password");
+        when(traineeRepository.findByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        when(traineeRepository.save(existingTrainee)).thenReturn(existingTrainee);
 
-            AuthCredentials result = traineeService.create(trainee);
+        traineeService.updateTrainee("alice.smith", update);
 
-            assertEquals("john.doe", result.getUsername());
-            assertEquals("password", result.getPassword());
-        }
+        verify(traineeRepository).save(existingTrainee);
     }
 
     @Test
-    void findById_ShouldReturnTrainee() {
-        when(traineeRepository.findById(1L)).thenReturn(Optional.of(trainee));
-        assertEquals(trainee, traineeService.findById(1L));
-    }
-
-    @Test
-    void findById_ShouldReturnNullWhenNotFound() {
-        when(traineeRepository.findById(99L)).thenReturn(Optional.empty());
-        assertNull(traineeService.findById(99L));
-    }
-
-    @Test
-    void findByUsername_ShouldReturnTrainee() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertEquals(trainee, traineeService.findByUsername("john.doe"));
-    }
-
-    @Test
-    void findByUsername_ShouldReturnNullWhenNotFound() {
+    void updateTrainee_shouldThrow_whenTraineeNotFound() {
         when(traineeRepository.findByUserUsername("unknown")).thenReturn(Optional.empty());
-        assertNull(traineeService.findByUsername("unknown"));
+
+        assertThatThrownBy(() -> traineeService.updateTrainee("unknown", new Trainee()))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Trainee not found");
     }
 
     @Test
-    void findAll_ShouldReturnAllTrainees() {
-        when(traineeRepository.findAll()).thenReturn(List.of(trainee));
-        assertEquals(1, traineeService.findAll().size());
-    }
-
-    @Test
-    void authenticate_ShouldReturnTrueForValidCredentials() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertTrue(traineeService.authenticate("john.doe", "password"));
-    }
-
-    @Test
-    void authenticate_ShouldReturnFalseForInvalidPassword() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertFalse(traineeService.authenticate("john.doe", "wrong"));
-    }
-
-    @Test
-    void authenticate_ShouldReturnFalseForUnknownUser() {
+    void updateTrainee_shouldNotCallSave_whenTraineeNotFound() {
         when(traineeRepository.findByUserUsername("unknown")).thenReturn(Optional.empty());
-        assertFalse(traineeService.authenticate("unknown", "pass"));
-    }
 
-    @Test
-    void authenticateWithAuth_ShouldReturnTrueForValidCredentials() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertTrue(traineeService.authenticate(validAuth));
-    }
-
-    @Test
-    void changePassword_ShouldUpdatePassword() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(traineeRepository.save(trainee)).thenReturn(trainee);
-
-        traineeService.changePassword(validAuth, "newPass");
-        assertEquals("newPass", user.getPassword());
-        verify(traineeRepository).save(trainee);
-    }
-
-    @Test
-    void changePassword_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.changePassword(new Auth("john.doe", "wrong"), "newPass"));
+        assertThatThrownBy(() -> traineeService.updateTrainee("unknown", new Trainee()));
         verify(traineeRepository, never()).save(any());
     }
 
+    // ── deleteTrainee ─────────────────────────────────────────────────────────
+
     @Test
-    void changePassword_ShouldThrowWhenUserNotFound() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.empty());
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.changePassword(validAuth, "newPass"));
+    void deleteTrainee_shouldCallDelete_whenFound() {
+        when(traineeRepository.findByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        doNothing().when(traineeRepository).delete(existingTrainee);
+
+        traineeService.deleteTrainee("alice.smith");
+
+        verify(traineeRepository).delete(existingTrainee);
     }
 
     @Test
-    void setActiveStatus_ShouldUpdateStatus() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(traineeRepository.save(trainee)).thenReturn(trainee);
+    void deleteTrainee_shouldThrow_whenNotFound() {
+        when(traineeRepository.findByUserUsername("ghost")).thenReturn(Optional.empty());
 
-        traineeService.setActiveStatus(validAuth, false);
-        assertFalse(user.getIsActive());
-        verify(traineeRepository).save(trainee);
+        assertThatThrownBy(() -> traineeService.deleteTrainee("ghost"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Trainee not found");
     }
 
     @Test
-    void setActiveStatus_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.setActiveStatus(new Auth("john.doe", "wrong"), true));
-        verify(traineeRepository, never()).save(any());
-    }
+    void deleteTrainee_shouldNotCallDelete_whenNotFound() {
+        when(traineeRepository.findByUserUsername("ghost")).thenReturn(Optional.empty());
 
-    @Test
-    void updateTrainee_ShouldUpdateFields() {
-        Trainee updated = new Trainee(null, LocalDate.now(), "New Address",
-                new User(null, "Jane", "Smith", null, null, true), null, null);
-
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(traineeRepository.save(trainee)).thenReturn(trainee);
-
-        Trainee result = traineeService.updateTrainee(validAuth, updated);
-
-        assertEquals("New Address", result.getAddress());
-        assertEquals("Jane", result.getUser().getFirstName());
-        assertEquals("Smith", result.getUser().getLastName());
-        verify(traineeRepository).save(trainee);
-    }
-
-    @Test
-    void updateTrainee_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.updateTrainee(new Auth("john.doe", "wrong"), new Trainee()));
-        verify(traineeRepository, never()).save(any());
-    }
-
-    @Test
-    void deleteTrainee_ShouldDelete() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-
-        traineeService.deleteTrainee(validAuth);
-        verify(traineeRepository).delete(trainee);
-    }
-
-    @Test
-    void deleteTrainee_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.deleteTrainee(new Auth("john.doe", "wrong")));
+        assertThatThrownBy(() -> traineeService.deleteTrainee("ghost"));
         verify(traineeRepository, never()).delete(any());
     }
 
-    @Test
-    void getUnassignedTrainers_ShouldReturnList() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(trainerRepository.findNotAssignedToTrainee("john.doe")).thenReturn(List.of(new Trainer()));
+    // ── getUnassignedTrainers ─────────────────────────────────────────────────
 
-        assertEquals(1, traineeService.getUnassignedTrainers(validAuth).size());
+    @Test
+    void getUnassignedTrainers_shouldReturnTrainerList() {
+        Trainer t1 = makeTrainer(10L, "trainer1");
+        Trainer t2 = makeTrainer(11L, "trainer2");
+
+        when(trainerRepository.findNotAssignedToTrainee("alice.smith"))
+                .thenReturn(List.of(t1, t2));
+
+        List<Trainer> result = traineeService.getUnassignedTrainers("alice.smith");
+
+        assertThat(result).hasSize(2).containsExactly(t1, t2);
+        verify(trainerRepository).findNotAssignedToTrainee("alice.smith");
     }
 
     @Test
-    void getUnassignedTrainers_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.getUnassignedTrainers(new Auth("john.doe", "wrong")));
+    void getUnassignedTrainers_shouldReturnEmpty_whenAllAssigned() {
+        when(trainerRepository.findNotAssignedToTrainee("alice.smith"))
+                .thenReturn(List.of());
+
+        List<Trainer> result = traineeService.getUnassignedTrainers("alice.smith");
+
+        assertThat(result).isEmpty();
+    }
+
+    // ── updateTrainers ────────────────────────────────────────────────────────
+
+    @Test
+    void updateTrainers_shouldAddNewTrainers_whenNotAlreadyAssigned() {
+        when(traineeRepository.findWithTrainersByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+
+        Trainer newTrainer = makeTrainer(20L, "new.trainer");
+        when(trainerRepository.findByUserUsernameIn(anySet()))
+                .thenReturn(List.of(newTrainer));
+        when(traineeRepository.save(any())).thenReturn(existingTrainee);
+
+        traineeService.updateTrainers("alice.smith", List.of("new.trainer"));
+
+        assertThat(existingTrainee.getTrainers()).contains(newTrainer);
+        verify(traineeRepository).save(existingTrainee);
     }
 
     @Test
-    void updateTrainers_ShouldAddAndRemoveTrainers() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
+    void updateTrainers_shouldRemoveTrainers_notInNewList() {
+        Trainer existing = makeTrainer(30L, "old.trainer");
+        existingTrainee.getTrainers().add(existing);
 
-        Trainer existing = new Trainer();
-        existing.setUser(new User(2L, "Keep", "Trainer", "keep", "pass", true));
-        trainee.getTrainers().add(existing);
+        when(traineeRepository.findWithTrainersByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        when(trainerRepository.findByUserUsernameIn(anySet()))
+                .thenReturn(List.of());
+        when(traineeRepository.save(any())).thenReturn(existingTrainee);
 
-        Trainer newTrainer = new Trainer();
-        newTrainer.setUser(new User(3L, "New", "Trainer", "new", "pass", true));
-
-        when(traineeRepository.findWithTrainersByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(trainerRepository.findByUserUsernameIn(Set.of("new"))).thenReturn(List.of(newTrainer));
-        when(traineeRepository.save(trainee)).thenReturn(trainee);
-
-        traineeService.updateTrainers(validAuth, List.of("keep", "new"));
-
-        assertTrue(trainee.getTrainers().contains(existing));
-        assertTrue(trainee.getTrainers().contains(newTrainer));
-        assertEquals(2, trainee.getTrainers().size());
-        verify(traineeRepository).save(trainee);
+        traineeService.updateTrainers("alice.smith", List.of("new.trainer.not.in.db"));
+        // "old.trainer" is not in requested list → removed
+        assertThat(existingTrainee.getTrainers())
+                .noneMatch(t -> t.getUser().getUsername().equals("old.trainer"));
     }
 
     @Test
-    void updateTrainers_ShouldRemoveAllWhenEmptyList() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
+    void updateTrainers_shouldSkipAlreadyAssignedTrainers() {
+        Trainer already = makeTrainer(40L, "already.trainer");
+        existingTrainee.getTrainers().add(already);
 
-        Trainer trainer = new Trainer();
-        trainer.setUser(new User(2L, "Some", "Trainer", "some", "pass", true));
-        trainee.getTrainers().add(trainer);
+        when(traineeRepository.findWithTrainersByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        // already.trainer is filtered out before querying DB
+        when(trainerRepository.findByUserUsernameIn(anySet()))
+                .thenReturn(List.of());
+        when(traineeRepository.save(any())).thenReturn(existingTrainee);
 
-        when(traineeRepository.findWithTrainersByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(trainerRepository.findByUserUsernameIn(Set.of())).thenReturn(List.of());
-        when(traineeRepository.save(trainee)).thenReturn(trainee);
+        traineeService.updateTrainers("alice.smith", List.of("already.trainer"));
 
-        traineeService.updateTrainers(validAuth, List.of());
-
-        assertTrue(trainee.getTrainers().isEmpty());
-        verify(traineeRepository).save(trainee);
+        // Should not have duplicate
+        long count = existingTrainee.getTrainers().stream()
+                .filter(t -> t.getUser().getUsername().equals("already.trainer"))
+                .count();
+        assertThat(count).isEqualTo(1);
     }
 
     @Test
-    void updateTrainers_ShouldThrowWhenTrainerNotFound() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(traineeRepository.findWithTrainersByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        when(trainerRepository.findByUserUsernameIn(Set.of("nonexistent"))).thenReturn(List.of());
+    void updateTrainers_shouldThrow_whenTraineeNotFound() {
+        when(traineeRepository.findWithTrainersByUserUsername("ghost"))
+                .thenReturn(Optional.empty());
 
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.updateTrainers(validAuth, List.of("nonexistent")));
+        assertThatThrownBy(() ->
+                traineeService.updateTrainers("ghost", List.of("some.trainer")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Trainee not found");
+    }
+
+    @Test
+    void updateTrainers_shouldThrow_whenARequestedTrainerDoesNotExist() {
+        when(traineeRepository.findWithTrainersByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+        when(trainerRepository.findByUserUsernameIn(anySet()))
+                .thenReturn(List.of()); // DB returned nothing for "ghost.trainer"
+
+        assertThatThrownBy(() ->
+                traineeService.updateTrainers("alice.smith", List.of("ghost.trainer")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Trainers not found");
+    }
+
+    @Test
+    void updateTrainers_shouldNotSave_whenTraineeNotFound() {
+        when(traineeRepository.findWithTrainersByUserUsername("ghost"))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() ->
+                traineeService.updateTrainers("ghost", List.of()));
         verify(traineeRepository, never()).save(any());
     }
 
+    // ── afterCreate ───────────────────────────────────────────────────────────
+
     @Test
-    void updateTrainers_ShouldThrowWhenAuthFails() {
-        when(traineeRepository.findByUserUsername("john.doe")).thenReturn(Optional.of(trainee));
-        assertThrows(IllegalArgumentException.class,
-                () -> traineeService.updateTrainers(new Auth("john.doe", "wrong"), List.of("trainer")));
+    void afterCreate_shouldIncrementTraineeMetric() {
+        traineeService.afterCreate(existingTrainee);
+        verify(userMetrics).incrementTrainee();
+    }
+
+    // ── getRepository / findByUsernameOptional ────────────────────────────────
+
+    @Test
+    void findByUsernameOptional_shouldReturnTrainee_whenFound() {
+        when(traineeRepository.findByUserUsername("alice.smith"))
+                .thenReturn(Optional.of(existingTrainee));
+
+        // Exercise through updateTrainee which delegates to findByUsernameOptional
+        Trainee update = new Trainee();
+        update.setAddress("new");
+        update.setUser(User.builder().firstName("A").lastName("B").password("p").build());
+        when(traineeRepository.save(any())).thenReturn(existingTrainee);
+
+        Trainee result = traineeService.updateTrainee("alice.smith", update);
+        assertThat(result).isNotNull();
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    private Trainer makeTrainer(Long id, String username) {
+        User u = User.builder()
+                .id(id)
+                .firstName("Trainer")
+                .lastName("X")
+                .username(username)
+                .password("p")
+                .isActive(true)
+                .build();
+        Trainer t = new Trainer();
+        t.setId(id);
+        t.setUser(u);
+        t.setTrainees(new ArrayList<>());
+        t.setTrainings(new ArrayList<>());
+        return t;
     }
 }

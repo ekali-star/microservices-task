@@ -17,7 +17,7 @@ class CredentialsGeneratorTest {
 
     @Test
     void generateUsername_shouldAddNumberIfExists() {
-        User existing = new User(null, "John", "Doe", "John.Doe", "pass", true);
+        User existing = new User(null, "John", "Doe", "John.Doe", "pass", true, 0, null, null);
 
         String username = CredentialsGenerator.generateUsername(
                 "John",
